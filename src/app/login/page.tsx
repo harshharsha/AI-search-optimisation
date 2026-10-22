@@ -1,5 +1,3 @@
-"use client";
-
 import { SubmitButton } from "@/src/components/submit-button";
 import Link from "next/link";
 import { login } from "./actions";
