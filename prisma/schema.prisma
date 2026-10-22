@@ -1,0 +1,185 @@
+generator client {
+  provider = "prisma-client"
+  output   = "../src/generated/prisma"
+}
+
+datasource db {
+  provider = "postgresql"
+}
+
+enum RunStatus {
+  PENDING
+  RUNNING
+  COMPLETED
+  FAILED
+}
+
+enum Sentiment {
+  POSITIVE
+  NEUTRAL
+  NEGATIVE
+}
+
+model Project {
+  id        String   @id @default(cuid())
+  name      String
+  /// OpenRouter (or other provider) model ids to run every prompt against
+  models    String[]
+  /// Cron expression for scheduled runs
+  schedule  String   @default("0 9 * * *")
+  /// How many times each prompt runs per model in one batch
+  repeats   Int      @default(1)
+  /// Random token for the public read-only report link; null = not shared
+  shareToken String?  @unique
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  brands  Brand[]
+  prompts Prompt[]
+  runs    Run[]
+  audits  Audit[]
+  tasks   Task[]
+}
+
+/// Both the user's own brand and its competitors
+model Brand {
+  id        String   @id @default(cuid())
+  projectId String
+  name      String
+  /// Alternate spellings matched when parsing answers
+  aliases   String[]
+  domain    String?
+  isOwn     Boolean  @default(false)
+  createdAt DateTime @default(now())
+
+  project   Project    @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  mentions  Mention[]
+  citations Citation[]
+
+  @@unique([projectId, name])
+  @@index([projectId])
+}
+
+model Prompt {
+  id        String   @id @default(cuid())
+  projectId String
+  text      String
+  tags      String[]
+  active    Boolean  @default(true)
+  createdAt DateTime @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  runs    Run[]
+
+  @@index([projectId])
+}
+
+/// One execution: a single prompt sent to a single model
+model Run {
+  id         String    @id @default(cuid())
+  projectId  String
+  promptId   String
+  model      String
+  status     RunStatus @default(PENDING)
+  rawText    String?
+  error      String?
+  latencyMs  Int?
+  createdAt  DateTime  @default(now())
+  finishedAt DateTime?
+  /// Set once a job has been sent to the queue for this run
+  queuedAt   DateTime?
+
+  project   Project    @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  prompt    Prompt     @relation(fields: [promptId], references: [id], onDelete: Cascade)
+  mentions  Mention[]
+  citations Citation[]
+
+  @@index([projectId, createdAt])
+  @@index([promptId, model, createdAt])
+  @@index([status, queuedAt])
+}
+
+/// A brand found in an answer
+model Mention {
+  id        String     @id @default(cuid())
+  runId     String
+  brandId   String
+  /// 1 = first brand mentioned in the answer
+  position  Int
+  count     Int        @default(1)
+  sentiment Sentiment?
+  snippet   String?
+
+  run   Run   @relation(fields: [runId], references: [id], onDelete: Cascade)
+  brand Brand @relation(fields: [brandId], references: [id], onDelete: Cascade)
+
+  @@unique([runId, brandId])
+  @@index([brandId])
+}
+
+/// A URL cited in an answer
+model Citation {
+  id      String  @id @default(cuid())
+  runId   String
+  url     String
+  domain  String
+  title   String?
+  /// Set when the cited domain belongs to a tracked brand
+  brandId String?
+
+  run   Run    @relation(fields: [runId], references: [id], onDelete: Cascade)
+  brand Brand? @relation(fields: [brandId], references: [id], onDelete: SetNull)
+
+  @@index([runId])
+  @@index([domain])
+}
+
+/// A snapshot of how ready the brand's website is for AI crawlers and answer engines
+model Audit {
+  id        String   @id @default(cuid())
+  projectId String
+  url       String
+  score     Int
+  /// Array of { id, label, status, impact, detail, fix }
+  checks    Json
+  createdAt DateTime @default(now())
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId, createdAt])
+}
+
+enum TaskStatus {
+  TODO
+  IN_PROGRESS
+  DONE
+}
+
+enum TaskKind {
+  WEBSITE
+  CONTENT
+  OUTREACH
+  OTHER
+}
+
+/// A piece of agency work: a website fix, a page to write, a site to get featured on
+model Task {
+  id        String     @id @default(cuid())
+  projectId String
+  title     String
+  detail    String?
+  kind      TaskKind   @default(OTHER)
+  status    TaskStatus @default(TODO)
+  /// Where a suggested task came from (audit:schema, content:<promptId>, outreach:<domain>), to avoid duplicates
+  source    String?
+  createdAt DateTime   @default(now())
+  doneAt    DateTime?
+  brief      String?
+  briefModel String?
+  briefAt    DateTime?
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@unique([projectId, source])
+  @@index([projectId, status])
+}
